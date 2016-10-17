@@ -1,3 +1,4 @@
+from .Exceptions import *
 from uuid import uuid1  #For unique self path creation
 import os               #For path verification
 
@@ -33,15 +34,12 @@ class GPIO(object):
         return self._uuid
         
     #Path of the Input Interface
+    @property
     def input(self):
         return self._input
         
     #Path of the Output Interface
+    @property
     def output(self):
         return self._output
         
-    
-        
-#Exceptions:
-class PathError(Exception):
-    pass
