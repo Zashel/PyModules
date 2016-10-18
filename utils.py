@@ -33,7 +33,7 @@ def threadize(function):
         t.start()
         return t
     return inner
-    _make_thread.__name__ = function.__name__
+    _threadize.__name__ = function.__name__
 
 def daemonize(function):
     '''
@@ -49,7 +49,7 @@ def daemonize(function):
         t.start()
         return t
     return inner
-    _make_daemon.__name__ = function.__name__
+    _daemonize.__name__ = function.__name__
     
 #For compatibilities with other modules and stuff of my own:
 buscar_unidad = search_win_drive
