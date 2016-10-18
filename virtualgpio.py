@@ -1,9 +1,10 @@
-from .Exceptions import *
+from .exceptions import *
 from .utils import daemonize #This is for listening
 from uuid import uuid1  #For unique self path creation
 import datetime         #For timing-out
 import os               #For path verification
 import time             #For sleeping. It's time now...
+import shutil
 
 #Folder names
 INPUT = "input"
@@ -17,6 +18,99 @@ DEFAULT_SLEEP = 1
 TIMEOUT = DEFAULT_TIMEOUT #TODO: implement Timeout
 SLEEP = DEFAULT_SLEEP
 
+#Virtual GPIO Handler
+class VirtualGPIOBaseHandler(object):   #To be subclassed to handle the GPIO and other Stuff
+    #~~~~~~~~~~BUILT-IN~~~~~~~~~~#
+    def __init__(self):
+        '''
+        You must subclass it to handle the GPIO and other Stuff
+        '''
+        self._virtualGPIO = None
+        self._connected_stuff = dict()
+        
+    def __getattr__(self, key):
+        if key in self._connected_stuff:
+            return self._connected_stuff[key]
+        else:
+            raise AttributeError
+    #~~~~~~~~~PROPERTIES~~~~~~~~~#
+    @property
+    def virtualGPIO(self):
+        return self._virtualGPIO
+    
+    @property
+    def is_connected(self):
+        return isinstance(self._virtualGPIO, VirtualGPIO)
+
+    #~~~~~~~~~FUNCTIONS~~~~~~~~~~#
+    def connect_virtual_GPIO(self, gpio):
+        if isinstance(gpio, VirtualGPIO):
+            self._virtualGPIO = gpio
+        else:
+            raise VirtualGPIOError
+            
+    def connect_stuff(self, **kwargs):
+        '''
+        Yes, Stuff, You can handle other app if you like.
+        If you name it "app" you can access it with handle.app
+        '''
+        for kwarg in kwargs:
+            self._connected_stuff[kwarg] = kwargs[kwarg]
+            
+    def get_signal(self, signal):
+        return self.__getattribute__("signal_{}".format(signal))
+            
+    #Base Handling functions:
+    #All signals must begin with "signal_"
+    def signal_connect(self, uuid, timeout):
+        timeout = datetime.datetime.strptime(timeout, "%Y%m%d%H%M%S")
+        self.virtualGPIO.connections[uuid] = timeout #TODO: debug this. This is going to f*ck up all.
+
+    def signal_disconnect(self, uuid):
+        self.virtualGPIO.disconnect_client(uuid)
+
+class Signal(): #Subclass this, you fool
+    pass
+        
+#MetaSignal!!! This is awesome! TODO: All da f*cking doc!
+class MetaSignal(type): #More than a MetaSignal
+    def __new__(cls, action, arg_names=list(), arg_types=list()):
+        #Defining the class. I love this shit
+        def __init__(obj, *args, **kwargs):
+            Signal.__init__(obj)
+            assert len(arg_names)==len(args)
+            for index, item in enumerate(args):
+                assert isinstance(item, arg_types[index])
+            obj._args = args
+        dct = dict()        
+        dct["__init__"] = __init__
+        dct["args"] = property(lambda self: self._args)
+        dct["action"] = property(lambda self: self.__class__.__name__.lower())
+        dct["bytearray"] = property(lambda self:
+                bytearray(
+                        "{}:\n".format(action.lower())+"\n".join([str(arg) for arg in self.args]),   
+                        "utf-8"
+                        )
+               )
+        return type.__new__(cls, action, (Signal, ), dct)
+
+    def __init__(cls, action, arg_names=list(), arg_types=list()):
+        type.__init__(cls, action, (Signal, ), {})
+        try:
+            assert len(arg_names)==len(arg_types)
+        except:
+            raise
+        cls.arg_names = arg_names
+        cls.arg_types = arg_types
+        cls.action = action.lower()
+
+ConnectSignal = MetaSignal("Connect", ("uuid", "timeout"), (str, str))
+DisconnectSignal = MetaSignal("Disconnect", ("uuid", ), (str, ))
+                         
+#Own Errors
+class VirtualGPIOError(Exception):
+    pass
+
 #Main Class of the VirtualGPIO Object
 class VirtualGPIO(object):
     #~~~~~~~~~VirtualGPIO~~~~~~~~#
@@ -24,7 +118,7 @@ class VirtualGPIO(object):
     def __init__(
             self,
             path,
-            handler=VirtualGPIOBaseHandler()
+            handler=VirtualGPIOBaseHandler(),
             *,
             timeout = DEFAULT_TIMEOUT):
         '''
@@ -43,19 +137,12 @@ class VirtualGPIO(object):
         self._input = os.path.join(self.path, INPUT)    #See property path ahead
         self._output = os.path.join(self.path, OUTPUT)
         self.connections = dict()
-        handler.connect_virtual_GPIO(self)
         self._handler = handler
-        self._exit = False
+        self._handler.connect_virtual_GPIO(self)
+        self._connected = False
 
     def __del__(self): #I thought this to be fun
-        while True:
-            try:
-                self.disconnect()
-                break
-            except:
-                pass #TODO: ask for action. Which one? Aaaaaah
-        time.sleep(SLEEP)
-        
+        self.disconnect()
             
     #~~~~~~~~~VirtualGPIO~~~~~~~~#  
     #~~~~~~~~~PROPERTIES~~~~~~~~~#
@@ -63,18 +150,17 @@ class VirtualGPIO(object):
     @property
     def clients(self):
         return os.path.join(self._path, CLIENTS)
+
+    #True if connected
+    @property
+    def connected(self):
+        return self._connected
     
     #Handler
     @property
     def handler(self):
         return self._handler
         
-                os.rename(file_path, destination_path)
-            except:
-                raise Exception #Look for an Exception
-        else:
-            return TypeError("message must be a bytearray or a str")
-
     #Path of the Input Interface
     @property
     def input(self):
@@ -88,23 +174,23 @@ class VirtualGPIO(object):
     #Path of the VirtualGPIO
     @property
     def path(self):
-        return os.path.join(self._path, self._uuid)
+        return os.path.join(self._path, self.uuid)
 
     #Unique Identifier of the Virtual GPIO
     @property
     def uuid(self):
-        return self._uuid
+        return self._uuid.hex
         
     #~~~~~~~~~VirtualGPIO~~~~~~~~#
     #~~~~~~~~~~FUNCTIONS~~~~~~~~~#
-    def _raw_send(destination, message): #Send it anyway
-        now = self.now()    #Twice
+    def _raw_send(self, destination, message): #Send it anyway
+        now = self.timeout()    #Twice
         if isinstance(message, str):
             message = bytearray(message, "utf-8")
         if isinstance(message, bytearray):
             file_name = "{}@{}".format(now, destination)
             file_path = os.path.join(self.output, file_name)
-            with open(file_path, "rb") as message_file:
+            with open(file_path, "wb") as message_file:
                 message_file.write(message)
             destination_path = os.path.join(
                     self._path, 
@@ -134,24 +220,34 @@ class VirtualGPIO(object):
                     if timeout >= now:
                         self.connections[uuid_file_name] = timeout
         self.keep_alive()   #See function ahead
+        os.mkdir(self.path)
+        os.mkdir(self.input)
+        os.mkdir(self.output)
         for connection in self.connections: #Forgot this
-            signal = ConnectionSignal(uuid, now+TIMEOUT)
+            signal = ConnectSignal(self.uuid, self.timeout())
             self.send(connection, signal)
+        self._connected = True
 
     def disconnect(self):   #Say Goodbye
-        slef._exit = True
-        for connection in self.connections:
-            self.send(connection, DisconnectSignal())
-        x = int()
-        while x < 10:
+        if self.connected:
+            # ^ This shit blocked everything!
+            for connection in self.connections:
+                self.send(connection, DisconnectSignal(self.uuid))
+            x = int()
+            while x < 10:
+                try:
+                    os.remove(os.path.join(self.clients, self.uuid))
+                    break
+                except:
+                    time.sleep(SLEEP)
+                    x+=1
+            if x==10:
+                raise DisconnectingError
             try:
-                os.remove(os.path.path.join(self.clients, self.uuid))
-                break
+                shutil.rmtree(self.path)
             except:
-                time.sleep(SLEEP)
-                x+=1
-        if x==10:
-            raise DisconnectingError
+                pass
+            self._connected = False
 
     def disconnect_client(self, uuid):   #It's sad, but the've said you goodbye
         try:
@@ -160,119 +256,43 @@ class VirtualGPIO(object):
             pass
             
     def keep_alive(self):    #Set next timeout
-        now = self.now()     #First
+        timeout = self.timeout()     #First
         with open(os.path.join(self.clients, self.uuid), "w") as uuid_file:
-            uuid_file.write(now)
+            uuid_file.write(timeout)
             
-    def now(self):           #First Golden Rule: If you use it twice, write it once.
+    def timeout(self):           #First Golden Rule: If you use it twice, write it once.
         now = datetime.datetime.now()
         timeout = now + TIMEOUT
         timeout = timeout.strftime("%Y%m%d%H%M%S")
-        return now
+        return timeout #I should change all nows for timeout
         
     @daemonize
     def listen(self): #Let's listen on Input
         lsdir = list()
-        while (not self._exit or len(lsdir)>0): #This will listen almost all the messages
+        while True: #This will listen almost all the messages
             if len(lsdir)>0:
                 lsdir.sort()
                 for message_file_name in lsdir:
                     try:
                         with open(os.path.join(self.input, message_file_name), "r") as message_file:
-                            signal = message_file.readline().strip("\n").strip(":")
+                            signal = message_file.readline()
+                            signal = signal.strip("\n").strip(":")
                             args = list()
                             next = message_file.readline().strip("\n")
                             while next != "":
                                 args.append(next)
                                 next = message_file.readline().strip("\n")
-                                self.handler.get_signal(signal)(*args)
+                            self.handler.get_signal(signal)(*args)
+                        os.remove(os.path.join(self.input, message_file_name)) #Another thing I forgot
                     except:
                         raise #By now
             lsdir = os.listdir(self.input)
             time.sleep(SLEEP)
+
+    def run(self):
+        self.connect()
+        self.listen()
         
-    def send(destination, signal): #signal from BaseSignal
-        assert isinstance(signal, BaseSignal)
+    def send(self, destination, signal): #signal from MetaSignal
+        assert isinstance(signal, Signal)
         self._raw_send(destination, signal.bytearray)
-        
-        
-#Virtual GPIO Handler
-class VirtualGPIOBaseHandler(object):   #To be subclassed to handle the GPIO and other Stuff
-    #~~~~~~~~~~BUILT-IN~~~~~~~~~~#
-    def __init__(self):
-        '''
-        You must subclass it to handle the GPIO and other Stuff
-        '''
-        self._virtualGPIO = None
-        self._connected_stuff = dict()
-        
-    def __getattr__(self, key):
-        if key in self._connected_stuff:
-            return self._connected_stuff[key]
-        else:
-            raise AttributeError
-    #~~~~~~~~~PROPERTIES~~~~~~~~~#
-    @property
-    def virtualGPIO(self):
-        return self._virtualGPIO
-    
-    @property
-    def is_connected(self):
-        return isinstance(self._vitualGPIO, VirtualGPIO)
-
-    #~~~~~~~~~FUNCTIONS~~~~~~~~~~#
-    def connect_virtual_GPIO(self, gpio):
-        if isinstance(gpio, VirtualGPIO):
-            self._VirtualGPIO = gpio
-        else:
-            raise VirtualGPIOError
-            
-    def connect_stuff(self, **kwargs):
-        '''
-        Yes, Stuff, You can handle other app if you like.
-        If you name it "app" you can access it with handle.app
-        '''
-        for kwarg in kwargs:
-            self._connected_stuff[kwarg] = kwargs[kwarg]
-            
-    def get_signal(self, signal):
-        return self.__getattr__("signal_{}".format(signal))
-            
-    #Base Handling functions:
-    #All signals must begin with "signal_"
-    def signal_connect(self, uuid, timeout):
-        self.virtualGPIO.connections[uuid] = timeout #TODO: debug this. This is going to f*ck up all.
-
-    def signal_disconnect(self, uuid):
-        self.virtualGPIO.disconnect_client(uuid)
-        
-#BaseSignal!!! This is awesome! TODO: All da f*cking doc!
-class BaseSignal(type): #More than a BaseSignal
-    def __new__(cls, action, arg_names=list(), arg_types=list()):
-        assert len(arg_names)==len(arg_types)
-        cls.arg_names = arg_names
-        cls.arg_types = arg_types
-        #Defining the class. I love this shit
-        def __init__(obj, *args, **kwargs):
-            assert len(arg_names)==len(args)
-            for index, item in enumerate(args):
-                assert isinstance(item, obj.__class__.arg_types[index])
-            obj._args = args
-        dct = dict()        
-        dct["__init__"] = __init__
-        dct["args"] = property(lambda self: self._args)
-        dct["action"] = property(lambda self: self.__class__.__name__.lower())
-        dct["bytearray"] = property(lambda self:
-                bytearray(
-                        "{}:\n".format(self.action)+"\n".join([str(arg) for arg in self.args]),   
-                        "utf-8"
-                        )
-               )
-        return type.__new__(cls, action, (), dct)
-
-ConnectSignal = BaseSignal("Connect", (uuid, timeout), (str, datetime.datetime))
-DisconnectSignal = BaseSignal("Disconnect")
-                         
-#Own Errors
-class VirtualGPIOError(Exception):
-    pass
