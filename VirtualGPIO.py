@@ -109,6 +109,15 @@ class VirtualGPIO(object):
             file_path = os.path.join(self.output, file_name)
             with open(file_path, "rb") as message_file:
                 message_file.write(message)
+            destination_path = os.path.join(
+                    self._path, 
+                    destination,
+                    INPUT,
+                    file_name) #Now we move the data.
+            try:
+                os.rename(file_path, destination_path)
+            except:
+                raise Exception #Look for an Exception
         else:
             return TypeError("message must be a bytearray or a str")
         
