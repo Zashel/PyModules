@@ -7,4 +7,4 @@ New signals are classes of metaclass BaseSignal and are created instantiating th
 
 You can handle directly the signals subclassing VirtualGPIOBaseHandler and creating new functions with the name "signal\_" and signal name.
 
-Instantiate VirtualGPIO and use the daemon "listen" to notice all signals, including connect and disconnect. Other stuff relies on you.
+Instantiate VirtualGPIO, connect, and use the daemon "listen" to notice all signals, including connect and disconnect. Other stuff relies on you.
