@@ -1,6 +1,10 @@
 import os
 from threading import Thread
-from .Exceptions import PathError
+from .exceptions import PathError
+
+#Not sure I wrote this code. 
+#I suppose I didn't, but found it as tutorials.
+#If this is yours, please, tell me.
 
 def search_win_drive(path):
     '''
@@ -15,7 +19,7 @@ def search_win_drive(path):
         if os.path.exists(full_path):
             return full_path
     else:
-        raise PathError
+        raise PathError        
 
 def threadize(function):
     '''
@@ -47,7 +51,7 @@ def daemonize(function):
     return inner
     _make_daemon.__name__ = function.__name__
     
-#For compatibilities with ither modules and stuff of my own:
+#For compatibilities with other modules and stuff of my own:
 buscar_unidad = search_win_drive
 make_thread = threadize
 make_daemon = daemonize
