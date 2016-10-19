@@ -10,3 +10,5 @@ You can handle directly the signals subclassing VirtualGPIOBaseHandler and creat
 Instantiate VirtualGPIO, connect, and use the daemon "listen" to notice all signals, including connect and disconnect. Other stuff relies on you.
 
 *WebSocket* is a communication interface with HTML5 websockets. Instantiate with the port, use listen to receive and send to... whatever send does.
+
+*This "PyModules" is "deprecated". Up to fork each module in their own project.*
